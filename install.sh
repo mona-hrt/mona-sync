@@ -25,9 +25,42 @@ fi
 ACTUAL_USER=${SUDO_USER:-$USER}
 HOME_DIR=$(eval echo ~$ACTUAL_USER)
 
-echo -e "${BLUE}📦 Installing system dependencies...${NC}"
-apt-get update -y
-apt-get install -y git curl build-essential libsqlite3-dev pkg-config sqlite3
+echo -e "${BLUE} Detecting OS and installing dependencies...${NC}"
+
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
+    OS_LIKE=$ID_LIKE
+else
+    OS=$(uname -s)
+fi
+
+case "$OS" in
+    ubuntu|debian|raspbian)
+        apt-get update -y
+        apt-get install -y git curl build-essential libsqlite3-dev pkg-config sqlite3
+        ;;
+    fedora|centos|rhel)
+        dnf install -y git curl gcc gcc-c++ make sqlite-devel pkgconfig sqlite
+        ;;
+    arch)
+        pacman -Sy --noconfirm git curl base-devel sqlite
+        ;;
+    *)
+        if [[ "$OS_LIKE" == *"debian"* ]]; then
+            apt-get update -y
+            apt-get install -y git curl build-essential libsqlite3-dev pkg-config sqlite3
+        elif [[ "$OS_LIKE" == *"rhel"* ]] || [[ "$OS_LIKE" == *"fedora"* ]]; then
+            dnf install -y git curl gcc gcc-c++ make sqlite-devel pkgconfig sqlite
+        elif [[ "$OS_LIKE" == *"arch"* ]]; then
+            pacman -Sy --noconfirm git curl base-devel sqlite
+        else
+            echo -e "${RED}❌ Unsupported distribution: $OS${NC}"
+            echo -e "Please install dependencies manually: git, curl, build tools, sqlite3, and sqlite-dev headers."
+            exit 1
+        fi
+        ;;
+esac
 
 if ! command -v cargo &> /dev/null; then
     echo -e "${BLUE}🦀 Installing Rust for ${ACTUAL_USER}...${NC}"
