@@ -62,6 +62,7 @@ pub struct MedicationIntake {
     pub administration_route_name: String,
     pub ester_name: Option<String>,
     pub supply_item_id: Option<String>,
+    pub notes: Option<String>,
     pub updated_at: i64,
     pub is_deleted: bool,
 }
@@ -74,6 +75,8 @@ pub struct BloodTest {
     pub time_zone: String,
     pub estradiol_levels: Option<String>,
     pub testosterone_levels: Option<String>,
+    pub estradiol_unit: Option<String>,
+    pub testosterone_unit: Option<String>,
     pub updated_at: i64,
     pub is_deleted: bool,
 }
@@ -175,7 +178,7 @@ async fn push_medication_intakes(
             ON CONFLICT(id) DO UPDATE SET scheduled_date_time=excluded.scheduled_date_time, taken_date_time=excluded.taken_date_time, taken_time_zone=excluded.taken_time_zone, dose=excluded.dose, schedule_id=excluded.schedule_id, side=excluded.side, molecule_json=excluded.molecule_json, administration_route_name=excluded.administration_route_name, ester_name=excluded.ester_name, supply_item_id=excluded.supply_item_id, updated_at=excluded.updated_at, is_deleted=excluded.is_deleted
             WHERE excluded.updated_at > medication_intakes.updated_at"#
         )
-        .bind(&intake.id).bind(&intake.scheduled_date_time).bind(&intake.taken_date_time).bind(&intake.taken_time_zone).bind(&intake.dose).bind(&intake.schedule_id).bind(&intake.side).bind(&intake.molecule_json).bind(&intake.administration_route_name).bind(&intake.ester_name).bind(&intake.supply_item_id).bind(intake.updated_at).bind(intake.is_deleted)
+        .bind(&intake.id).bind(&intake.scheduled_date_time).bind(&intake.taken_date_time).bind(&intake.taken_time_zone).bind(&intake.dose).bind(&intake.schedule_id).bind(&intake.side).bind(&intake.molecule_json).bind(&intake.administration_route_name).bind(&intake.ester_name).bind(&intake.supply_item_id).bind(&intake.notes).bind(&intake.ester_name).bind(&intake.supply_item_id).bind(intake.updated_at).bind(intake.is_deleted)
         .execute(&pool).await;
     }
     Json("OK")
@@ -192,7 +195,7 @@ async fn push_blood_tests(
             ON CONFLICT(id) DO UPDATE SET date_time=excluded.date_time, time_zone=excluded.time_zone, estradiol_levels=excluded.estradiol_levels, testosterone_levels=excluded.testosterone_levels, updated_at=excluded.updated_at, is_deleted=excluded.is_deleted
             WHERE excluded.updated_at > blood_tests.updated_at"#
         )
-        .bind(&test.id).bind(&test.date_time).bind(&test.time_zone).bind(&test.estradiol_levels).bind(&test.testosterone_levels).bind(test.updated_at).bind(test.is_deleted)
+        .bind(&test.id).bind(&test.date_time).bind(&test.time_zone).bind(&test.estradiol_levels).bind(&test.testosterone_levels).bind(&test.estradiol_unit).bind(&test.testosterone_unit).bind(test.updated_at).bind(test.is_deleted)
         .execute(&pool).await;
     }
     Json("OK")

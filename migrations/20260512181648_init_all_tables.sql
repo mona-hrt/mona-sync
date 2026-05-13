@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS medication_intakes (
     administration_route_name TEXT NOT NULL,
     ester_name TEXT,
     supply_item_id TEXT,
+    notes TEXT,
     updated_at INTEGER NOT NULL,
     is_deleted BOOLEAN NOT NULL DEFAULT 0,
     FOREIGN KEY (supply_item_id) REFERENCES supply_items(id) ON DELETE SET NULL,
@@ -51,6 +52,8 @@ CREATE TABLE IF NOT EXISTS blood_tests (
     time_zone TEXT NOT NULL,
     estradiol_levels TEXT,
     testosterone_levels TEXT,
+    estradiol_unit TEXT,
+    testosterone_unit TEXT,
     updated_at INTEGER NOT NULL,
     is_deleted BOOLEAN NOT NULL DEFAULT 0
 );
