@@ -1,4 +1,6 @@
 .zed/
+certs/
 target/
 .env
-database.db
+database.db*
+*.pem

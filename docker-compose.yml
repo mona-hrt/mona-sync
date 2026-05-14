@@ -1,0 +1,13 @@
+services:
+  mona-sync:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/usr/local/bin/data
+    environment:
+      - DATABASE_URL=sqlite://data/database.db
+      - SERVER_IP=0.0.0.0
+      - SERVER_PORT=3000
+      - RUST_LOG=mona_backend=info
+    restart: unless-stopped

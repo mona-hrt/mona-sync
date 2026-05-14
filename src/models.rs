@@ -80,6 +80,21 @@ pub struct BloodTest {
     pub is_deleted: bool,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct Claims {
+    pub exp: usize,
+}
+
+#[derive(Deserialize)]
+pub struct AuthPayload {
+    pub password: String,
+}
+
+#[derive(Serialize)]
+pub struct AuthResponse {
+    pub token: String,
+}
+
 pub fn deserialize_bool_from_anything<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: Deserializer<'de>,

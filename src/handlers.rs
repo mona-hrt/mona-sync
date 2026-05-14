@@ -1,64 +1,135 @@
 use axum::{
+    async_trait,
+    extract::{FromRequestParts, Query, State},
+    http::{header, request::Parts, StatusCode},
     Json,
-    extract::{Query, State},
 };
-use sqlx::SqlitePool;
-use crate::models::{BloodTest, MedicationIntake, MedicationSchedule, SupplyItem, SyncQuery};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::AppState;
+use crate::models::{
+    AuthPayload, AuthResponse, BloodTest, Claims, MedicationIntake, MedicationSchedule, SupplyItem,
+    SyncQuery,
+};
+
+#[async_trait]
+impl FromRequestParts<AppState> for Claims {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let auth_header = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+
+        if !auth_header.starts_with("Bearer ") {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+
+        let token = &auth_header[7..];
+        let token_data = decode::<Claims>(
+            token,
+            &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
+            &Validation::default(),
+        )
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+        Ok(token_data.claims)
+    }
+}
+
+pub async fn login(
+    State(state): State<AppState>,
+    Json(payload): Json<AuthPayload>,
+) -> Result<Json<AuthResponse>, StatusCode> {
+    if payload.password != state.api_password {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let expiration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_secs()
+        + (30 * 24 * 60 * 60); // 30 days
+
+    let claims = Claims {
+        exp: expiration as usize,
+    };
+
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(state.jwt_secret.as_bytes()),
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(AuthResponse { token }))
+}
 
 pub async fn pull_supply_items(
-    State(pool): State<SqlitePool>,
+    State(state): State<AppState>,
+    _claims: Claims,
     Query(q): Query<SyncQuery>,
 ) -> Json<Vec<SupplyItem>> {
     let rows = sqlx::query_as::<_, SupplyItem>("SELECT * FROM supply_items WHERE updatedAt > ?")
         .bind(q.last_sync)
-        .fetch_all(&pool)
+        .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
     Json(rows)
 }
 
 pub async fn pull_medication_schedules(
-    State(pool): State<SqlitePool>,
+    State(state): State<AppState>,
+    _claims: Claims,
     Query(q): Query<SyncQuery>,
 ) -> Json<Vec<MedicationSchedule>> {
     let rows = sqlx::query_as::<_, MedicationSchedule>(
         "SELECT * FROM medication_schedules WHERE updatedAt > ?",
     )
     .bind(q.last_sync)
-    .fetch_all(&pool)
+    .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
     Json(rows)
 }
 
 pub async fn pull_medication_intakes(
-    State(pool): State<SqlitePool>,
+    State(state): State<AppState>,
+    _claims: Claims,
     Query(q): Query<SyncQuery>,
 ) -> Json<Vec<MedicationIntake>> {
     let rows = sqlx::query_as::<_, MedicationIntake>(
         "SELECT * FROM medication_intakes WHERE updatedAt > ?",
     )
     .bind(q.last_sync)
-    .fetch_all(&pool)
+    .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
     Json(rows)
 }
 
 pub async fn pull_blood_tests(
-    State(pool): State<SqlitePool>,
+    State(state): State<AppState>,
+    _claims: Claims,
     Query(q): Query<SyncQuery>,
 ) -> Json<Vec<BloodTest>> {
     let rows = sqlx::query_as::<_, BloodTest>("SELECT * FROM blood_tests WHERE updatedAt > ?")
         .bind(q.last_sync)
-        .fetch_all(&pool)
+        .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
     Json(rows)
 }
 
 pub async fn push_supply_items(
-    State(pool): State<SqlitePool>,
+    State(state): State<AppState>,
+    _claims: Claims,
     Json(payload): Json<Vec<SupplyItem>>,
 ) -> Json<&'static str> {
     for item in payload {
@@ -69,13 +140,14 @@ pub async fn push_supply_items(
             WHERE excluded.updatedAt > supply_items.updatedAt"#
         )
         .bind(&item.id).bind(&item.r#type).bind(&item.name).bind(&item.total_dose).bind(&item.used_dose).bind(&item.concentration).bind(&item.molecule_json).bind(&item.administration_route_name).bind(&item.ester_name).bind(item.amount).bind(item.updated_at).bind(item.is_deleted)
-        .execute(&pool).await;
+        .execute(&state.pool).await;
     }
     Json("OK")
 }
 
 pub async fn push_medication_schedules(
-    State(pool): State<SqlitePool>,
+    State(state): State<AppState>,
+    _claims: Claims,
     Json(payload): Json<Vec<MedicationSchedule>>,
 ) -> Json<&'static str> {
     for sched in payload {
@@ -86,13 +158,14 @@ pub async fn push_medication_schedules(
             WHERE excluded.updatedAt > medication_schedules.updatedAt"#
         )
         .bind(&sched.id).bind(&sched.name).bind(&sched.dose).bind(sched.interval_days).bind(&sched.start_date).bind(&sched.molecule_json).bind(&sched.administration_route_name).bind(&sched.ester_name).bind(&sched.notification_times).bind(sched.updated_at).bind(sched.is_deleted)
-        .execute(&pool).await;
+        .execute(&state.pool).await;
     }
     Json("OK")
 }
 
 pub async fn push_medication_intakes(
-    State(pool): State<SqlitePool>,
+    State(state): State<AppState>,
+    _claims: Claims,
     Json(payload): Json<Vec<MedicationIntake>>,
 ) -> Json<&'static str> {
     for intake in payload {
@@ -116,13 +189,14 @@ pub async fn push_medication_intakes(
         .bind(&intake.notes)
         .bind(intake.updated_at)
         .bind(intake.is_deleted)
-        .execute(&pool).await;
+        .execute(&state.pool).await;
     }
     Json("OK")
 }
 
 pub async fn push_blood_tests(
-    State(pool): State<SqlitePool>,
+    State(state): State<AppState>,
+    _claims: Claims,
     Json(payload): Json<Vec<BloodTest>>,
 ) -> Json<&'static str> {
     for test in payload {
@@ -141,7 +215,7 @@ pub async fn push_blood_tests(
         .bind(&test.testosterone_unit)
         .bind(test.updated_at)
         .bind(test.is_deleted)
-        .execute(&pool).await;
+        .execute(&state.pool).await;
     }
     Json("OK")
 }
