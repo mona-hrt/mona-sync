@@ -1,8 +1,8 @@
 mod handlers;
 mod models;
 
-use axum::routing::{get, post};
 use axum::Router;
+use axum::routing::{get, post};
 use axum_server::tls_rustls::RustlsConfig;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::env;
@@ -74,7 +74,7 @@ async fn main() {
 
     let addr: SocketAddr = server_address.parse().expect("Invalid server address");
 
-    println!("🚀 Server starting on https://{}", server_address);
+    println!("Server starting on https://{}", server_address);
 
     axum_server::bind_rustls(addr, config)
         .serve(app.into_make_service())
