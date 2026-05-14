@@ -1,11 +1,7 @@
 mod handlers;
 mod models;
 
-use axum::{
-    Router,
-    response::Html,
-    routing::get,
-};
+use axum::{Router, response::Html, routing::get};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::env;
 
@@ -25,7 +21,6 @@ async fn main() {
         .unwrap();
 
     let app = Router::new()
-        .route("/", get(|| async { Html(include_str!("../index.html")) }))
         .route("/health", get(|| async { "Sync API is alive!" }))
         .route(
             "/api/sync/supply_items",
@@ -45,7 +40,9 @@ async fn main() {
         )
         .with_state(pool);
 
-    let listener = tokio::net::TcpListener::bind(&server_address).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(&server_address)
+        .await
+        .unwrap();
     println!("🚀 Server starting on http://{}", server_address);
     axum::serve(listener, app).await.unwrap();
 }
