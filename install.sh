@@ -24,10 +24,10 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${BLUE}🌟 Starting Mona Sync installation...${NC}"
+echo -e "${BLUE} Starting Mona Sync installation...${NC}"
 
 if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}❌ Please run as root or with sudo.${NC}"
+  echo -e "${RED} Please run as root or with sudo.${NC}"
   exit 1
 fi
 
@@ -72,7 +72,7 @@ case "$OS" in
 esac
 
 if ! command -v cargo &> /dev/null; then
-    echo -e "${BLUE}🦀 Installing Rust for ${ACTUAL_USER}...${NC}"
+    echo -e "${BLUE} Installing Rust for ${ACTUAL_USER}...${NC}"
     sudo -u "$ACTUAL_USER" bash <<EOF
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 EOF
@@ -97,11 +97,23 @@ echo -e "${BLUE} Ensure correct ownership...${NC}"
 chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$INSTALL_DIR"
 
 if [ ! -f ".env" ]; then
-    echo -e "${BLUE} Creating default .env file...${NC}"
+    echo -e "${BLUE} Configuring security credentials...${NC}"
+
+    RANDOM_JWT=$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)
+
+    echo -n -e " Enter a password for API sync (press Enter for a random one): "
+    read -r USER_PWD
+    if [ -z "$USER_PWD" ]; then
+        USER_PWD=$(openssl rand -base64 12 2>/dev/null || head -c 12 /dev/urandom | base64)
+        echo -e "${GREEN} Generated random password: $USER_PWD${NC}"
+    fi
+
     sudo -u "$ACTUAL_USER" cat <<EOF > .env
 DATABASE_URL=sqlite://database.db
 SERVER_IP=0.0.0.0
 SERVER_PORT=$DEFAULT_PORT
+JWT_SECRET=$RANDOM_JWT
+API_PASSWORD=$USER_PWD
 EOF
 fi
 
@@ -149,5 +161,11 @@ echo -e "${GREEN} Mona Sync is installed and running!${NC}"
 echo -e " Status: ${BLUE}systemctl status $SERVICE_NAME${NC}"
 
 PUBLIC_IP=$(curl -s https://ifconfig.me || echo "your-vps-ip")
-echo -e " Server address: ${GREEN}http://$PUBLIC_IP:$DEFAULT_PORT${NC}"
-echo -e " Health check: ${GREEN}http://$PUBLIC_IP:$DEFAULT_PORT/health${NC}"
+API_PWD=$(grep API_PASSWORD .env | cut -d '=' -f2)
+
+echo -e " Server address: ${GREEN}https://$PUBLIC_IP:$DEFAULT_PORT${NC}"
+echo -e " Health check: ${GREEN}https://$PUBLIC_IP:$DEFAULT_PORT/health${NC}"
+echo -e " API Password: ${GREEN}$API_PWD${NC} (Use this to login and get a JWT)"
+echo -e ""
+echo -e "${RED}⚠️  Note: You are using a self-signed certificate.${NC}"
+echo -e " Your browser or API client will show a warning; this is normal."
