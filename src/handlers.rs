@@ -1,19 +1,15 @@
 use axum::{
-    async_trait,
-    extract::{FromRequestParts, Query, State},
-    http::{header, request::Parts, StatusCode},
     Json,
+    extract::{FromRequestParts, Query, State},
+    http::{StatusCode, header, request::Parts},
+    response::Html,
 };
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::AppState;
-use crate::models::{
-    AuthPayload, AuthResponse, BloodTest, Claims, MedicationIntake, MedicationSchedule, SupplyItem,
-    SyncQuery,
-};
+use crate::models::{AuthPayload, AuthResponse, Claims, EncryptedSyncItem, SyncQuery, VaultItem};
 
-#[async_trait]
 impl FromRequestParts<AppState> for Claims {
     type Rejection = StatusCode;
 
@@ -71,151 +67,215 @@ pub async fn login(
     Ok(Json(AuthResponse { token }))
 }
 
+pub async fn pull_items(
+    state: AppState,
+    collection: &str,
+    last_sync: i64,
+) -> Vec<EncryptedSyncItem> {
+    sqlx::query_as::<_, EncryptedSyncItem>(
+        "SELECT * FROM sync_items WHERE collection = ? AND updatedAt > ?",
+    )
+    .bind(collection)
+    .bind(last_sync)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default()
+}
+
+pub async fn push_items(
+    state: AppState,
+    collection: &str,
+    items: Vec<EncryptedSyncItem>,
+) -> Result<(), sqlx::Error> {
+    for mut item in items {
+        item.collection = collection.to_string();
+        sqlx::query(
+            r#"INSERT INTO sync_items (id, collection, payload, updatedAt, isDeleted)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET collection=excluded.collection, payload=excluded.payload, updatedAt=excluded.updatedAt, isDeleted=excluded.isDeleted
+            WHERE excluded.updatedAt > sync_items.updatedAt"#
+        )
+        .bind(&item.id)
+        .bind(&item.collection)
+        .bind(&item.payload)
+        .bind(item.updated_at)
+        .bind(item.is_deleted)
+        .execute(&state.pool).await?;
+    }
+    Ok(())
+}
+
+// Wrapper handlers for specific routes to maintain API compatibility
 pub async fn pull_supply_items(
     State(state): State<AppState>,
     _claims: Claims,
     Query(q): Query<SyncQuery>,
-) -> Json<Vec<SupplyItem>> {
-    let rows = sqlx::query_as::<_, SupplyItem>("SELECT * FROM supply_items WHERE updatedAt > ?")
-        .bind(q.last_sync)
-        .fetch_all(&state.pool)
+) -> Json<Vec<EncryptedSyncItem>> {
+    Json(pull_items(state, "supply_items", q.last_sync).await)
+}
+
+pub async fn push_supply_items(
+    State(state): State<AppState>,
+    _claims: Claims,
+    Json(payload): Json<Vec<EncryptedSyncItem>>,
+) -> Result<Json<&'static str>, StatusCode> {
+    push_items(state, "supply_items", payload)
         .await
-        .unwrap_or_default();
-    Json(rows)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json("OK"))
 }
 
 pub async fn pull_medication_schedules(
     State(state): State<AppState>,
     _claims: Claims,
     Query(q): Query<SyncQuery>,
-) -> Json<Vec<MedicationSchedule>> {
-    let rows = sqlx::query_as::<_, MedicationSchedule>(
-        "SELECT * FROM medication_schedules WHERE updatedAt > ?",
-    )
-    .bind(q.last_sync)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-    Json(rows)
+) -> Json<Vec<EncryptedSyncItem>> {
+    Json(pull_items(state, "medication_schedules", q.last_sync).await)
+}
+
+pub async fn push_medication_schedules(
+    State(state): State<AppState>,
+    _claims: Claims,
+    Json(payload): Json<Vec<EncryptedSyncItem>>,
+) -> Result<Json<&'static str>, StatusCode> {
+    push_items(state, "medication_schedules", payload)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json("OK"))
 }
 
 pub async fn pull_medication_intakes(
     State(state): State<AppState>,
     _claims: Claims,
     Query(q): Query<SyncQuery>,
-) -> Json<Vec<MedicationIntake>> {
-    let rows = sqlx::query_as::<_, MedicationIntake>(
-        "SELECT * FROM medication_intakes WHERE updatedAt > ?",
-    )
-    .bind(q.last_sync)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-    Json(rows)
+) -> Json<Vec<EncryptedSyncItem>> {
+    Json(pull_items(state, "medication_intakes", q.last_sync).await)
+}
+
+pub async fn push_medication_intakes(
+    State(state): State<AppState>,
+    _claims: Claims,
+    Json(payload): Json<Vec<EncryptedSyncItem>>,
+) -> Result<Json<&'static str>, StatusCode> {
+    push_items(state, "medication_intakes", payload)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json("OK"))
 }
 
 pub async fn pull_blood_tests(
     State(state): State<AppState>,
     _claims: Claims,
     Query(q): Query<SyncQuery>,
-) -> Json<Vec<BloodTest>> {
-    let rows = sqlx::query_as::<_, BloodTest>("SELECT * FROM blood_tests WHERE updatedAt > ?")
-        .bind(q.last_sync)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
-    Json(rows)
-}
-
-pub async fn push_supply_items(
-    State(state): State<AppState>,
-    _claims: Claims,
-    Json(payload): Json<Vec<SupplyItem>>,
-) -> Json<&'static str> {
-    for item in payload {
-        let _ = sqlx::query(
-            r#"INSERT INTO supply_items (id, type, name, totalDose, usedDose, concentration, moleculeJson, administrationRouteName, esterName, amount, updatedAt, isDeleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET type=excluded.type, name=excluded.name, totalDose=excluded.totalDose, usedDose=excluded.usedDose, concentration=excluded.concentration, moleculeJson=excluded.moleculeJson, administrationRouteName=excluded.administrationRouteName, esterName=excluded.esterName, amount=excluded.amount, updatedAt=excluded.updatedAt, isDeleted=excluded.isDeleted
-            WHERE excluded.updatedAt > supply_items.updatedAt"#
-        )
-        .bind(&item.id).bind(&item.r#type).bind(&item.name).bind(&item.total_dose).bind(&item.used_dose).bind(&item.concentration).bind(&item.molecule_json).bind(&item.administration_route_name).bind(&item.ester_name).bind(item.amount).bind(item.updated_at).bind(item.is_deleted)
-        .execute(&state.pool).await;
-    }
-    Json("OK")
-}
-
-pub async fn push_medication_schedules(
-    State(state): State<AppState>,
-    _claims: Claims,
-    Json(payload): Json<Vec<MedicationSchedule>>,
-) -> Json<&'static str> {
-    for sched in payload {
-        let _ = sqlx::query(
-            r#"INSERT INTO medication_schedules (id, name, dose, intervalDays, startDate, moleculeJson, administrationRouteName, esterName, notificationTimes, updatedAt, isDeleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET name=excluded.name, dose=excluded.dose, intervalDays=excluded.intervalDays, startDate=excluded.startDate, moleculeJson=excluded.moleculeJson, administrationRouteName=excluded.administrationRouteName, esterName=excluded.esterName, notificationTimes=excluded.notificationTimes, updatedAt=excluded.updatedAt, isDeleted=excluded.isDeleted
-            WHERE excluded.updatedAt > medication_schedules.updatedAt"#
-        )
-        .bind(&sched.id).bind(&sched.name).bind(&sched.dose).bind(sched.interval_days).bind(&sched.start_date).bind(&sched.molecule_json).bind(&sched.administration_route_name).bind(&sched.ester_name).bind(&sched.notification_times).bind(sched.updated_at).bind(sched.is_deleted)
-        .execute(&state.pool).await;
-    }
-    Json("OK")
-}
-
-pub async fn push_medication_intakes(
-    State(state): State<AppState>,
-    _claims: Claims,
-    Json(payload): Json<Vec<MedicationIntake>>,
-) -> Json<&'static str> {
-    for intake in payload {
-        let _ = sqlx::query(
-            r#"INSERT INTO medication_intakes (id, scheduledDateTime, takenDateTime, takenTimeZone, dose, scheduleId, side, moleculeJson, administrationRouteName, esterName, supplyItemId, notes, updatedAt, isDeleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET scheduledDateTime=excluded.scheduledDateTime, takenDateTime=excluded.takenDateTime, takenTimeZone=excluded.takenTimeZone, dose=excluded.dose, scheduleId=excluded.scheduleId, side=excluded.side, moleculeJson=excluded.moleculeJson, administrationRouteName=excluded.administrationRouteName, esterName=excluded.esterName, supplyItemId=excluded.supplyItemId, notes=excluded.notes, updatedAt=excluded.updatedAt, isDeleted=excluded.isDeleted
-            WHERE excluded.updatedAt > medication_intakes.updatedAt"#
-        )
-        .bind(&intake.id)
-        .bind(&intake.scheduled_date_time)
-        .bind(&intake.taken_date_time)
-        .bind(&intake.taken_time_zone)
-        .bind(&intake.dose)
-        .bind(&intake.schedule_id)
-        .bind(&intake.side)
-        .bind(&intake.molecule_json)
-        .bind(&intake.administration_route_name)
-        .bind(&intake.ester_name)
-        .bind(&intake.supply_item_id)
-        .bind(&intake.notes)
-        .bind(intake.updated_at)
-        .bind(intake.is_deleted)
-        .execute(&state.pool).await;
-    }
-    Json("OK")
+) -> Json<Vec<EncryptedSyncItem>> {
+    Json(pull_items(state, "blood_tests", q.last_sync).await)
 }
 
 pub async fn push_blood_tests(
     State(state): State<AppState>,
     _claims: Claims,
-    Json(payload): Json<Vec<BloodTest>>,
-) -> Json<&'static str> {
-    for test in payload {
-        let _ = sqlx::query(
-            r#"INSERT INTO blood_tests (id, dateTime, timeZone, estradiolLevels, testosteroneLevels, estradiolUnit, testosteroneUnit, updatedAt, isDeleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET dateTime=excluded.dateTime, timeZone=excluded.timeZone, estradiolLevels=excluded.estradiolLevels, testosteroneLevels=excluded.testosteroneLevels, estradiolUnit=excluded.estradiolUnit, testosteroneUnit=excluded.testosteroneUnit, updatedAt=excluded.updatedAt, isDeleted=excluded.isDeleted
-            WHERE excluded.updatedAt > blood_tests.updatedAt"#
-        )
-        .bind(&test.id)
-        .bind(&test.date_time)
-        .bind(&test.time_zone)
-        .bind(&test.estradiol_levels)
-        .bind(&test.testosterone_levels)
-        .bind(&test.estradiol_unit)
-        .bind(&test.testosterone_unit)
-        .bind(test.updated_at)
-        .bind(test.is_deleted)
-        .execute(&state.pool).await;
+    Json(payload): Json<Vec<EncryptedSyncItem>>,
+) -> Result<Json<&'static str>, StatusCode> {
+    push_items(state, "blood_tests", payload)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json("OK"))
+}
+
+pub async fn get_vault(
+    State(state): State<AppState>,
+    _claims: Claims,
+) -> Result<Json<Option<VaultItem>>, StatusCode> {
+    let row = sqlx::query_as::<_, VaultItem>("SELECT payload, updatedAt FROM vault WHERE id = 1")
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(row))
+}
+
+pub async fn update_vault(
+    State(state): State<AppState>,
+    _claims: Claims,
+    Json(payload): Json<VaultItem>,
+) -> Result<Json<&'static str>, StatusCode> {
+    sqlx::query(
+        "INSERT INTO vault (id, payload, updatedAt) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, updatedAt=excluded.updatedAt"
+    )
+    .bind(&payload.payload)
+    .bind(payload.updated_at)
+    .execute(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json("OK"))
+}
+
+pub async fn dev_schema(State(state): State<AppState>) -> Html<String> {
+    use sqlx::{Column, Row};
+
+    let tables: Vec<(String,)> = sqlx::query_as("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_sqlx_migrations'")
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+
+    let mut html = String::from("<!DOCTYPE html><html><head><title>DB Explorer</title><style>
+        body { font-family: sans-serif; margin: 2em; background: #f4f4f9; }
+        .table-container { background: white; padding: 1em; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 2em; overflow-x: auto; }
+        table { border-collapse: collapse; width: 100%; font-size: 0.9em; table-layout: fixed; }
+        th, td { border: 1px solid #ddd; padding: 12px 8px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        th { background: #007bff; color: white; position: sticky; top: 0; }
+        .col-payload { width: 40%; }
+        .col-id { width: 200px; }
+        .col-updatedAt { width: 150px; }
+        .col-isDeleted { width: 80px; }
+        .col-collection { width: 150px; }
+        tr:nth-child(even) { background: #f9f9f9; }
+        tr:hover { background: #f1f1f1; }
+        h2 { color: #333; margin-top: 0; }
+        .empty { color: #888; font-style: italic; }
+        .payload-text { font-family: monospace; font-size: 0.85em; color: #555; }
+    </style></head><body><h1>Database Data Explorer</h1>");
+
+    for (table_name,) in tables {
+        html.push_str(&format!(
+            "<div class='table-container'><h2>Table: {}</h2>",
+            table_name
+        ));
+
+        let rows = sqlx::query(&format!("SELECT * FROM {} LIMIT 100", table_name))
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default();
+
+        if rows.is_empty() {
+            html.push_str("<p class='empty'>No rows found in this table.</p>");
+        } else {
+            html.push_str("<table><thead><tr>");
+
+            let columns = rows[0].columns();
+            for col in columns {
+                html.push_str(&format!("<th class='col-{}'>{}</th>", col.name(), col.name()));
+            }
+            html.push_str("</tr></thead><tbody>");
+
+            for row in rows {
+                html.push_str("<tr>");
+                for (i, col) in row.columns().iter().enumerate() {
+                    let value: String = row
+                        .try_get::<String, _>(i)
+                        .or_else(|_| row.try_get::<i64, _>(i).map(|v| v.to_string()))
+                        .or_else(|_| row.try_get::<bool, _>(i).map(|v| v.to_string()))
+                        .unwrap_or_else(|_| "<i>binary/null</i>".to_string());
+
+                    let class_name = if col.name() == "payload" { "payload-text" } else { "" };
+                    html.push_str(&format!("<td class='{}' title='{}'>{}</td>", class_name, value.replace("'", "&apos;"), value));
+                }
+                html.push_str("</tr>");
+            }
+            html.push_str("</tbody></table>");
+        }
+        html.push_str("</div>");
     }
-    Json("OK")
+
+    html.push_str("</body></html>");
+    Html(html)
 }

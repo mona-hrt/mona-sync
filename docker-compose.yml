@@ -1,8 +1,6 @@
 services:
   mona-sync:
     build: .
-    ports:
-      - "3000:3000"
     volumes:
       - ./data:/usr/local/bin/data
     environment:
@@ -10,4 +8,25 @@ services:
       - SERVER_IP=0.0.0.0
       - SERVER_PORT=3000
       - RUST_LOG=mona_backend=info
+      - USE_TLS=false
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key}
+      - API_PASSWORD=${API_PASSWORD:-your-api-password}
     restart: unless-stopped
+
+  caddy:
+    image: caddy:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN:-127.0.0.1.sslip.io}
+
+volumes:
+  caddy_data:
+  caddy_config:
