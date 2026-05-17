@@ -220,13 +220,19 @@ pub async fn dev_schema(State(state): State<AppState>) -> Html<String> {
     let mut html = String::from("<!DOCTYPE html><html><head><title>DB Explorer</title><style>
         body { font-family: sans-serif; margin: 2em; background: #f4f4f9; }
         .table-container { background: white; padding: 1em; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 2em; overflow-x: auto; }
-        table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
-        th, td { border: 1px solid #ddd; padding: 12px 8px; text-align: left; }
+        table { border-collapse: collapse; width: 100%; font-size: 0.9em; table-layout: fixed; }
+        th, td { border: 1px solid #ddd; padding: 12px 8px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         th { background: #007bff; color: white; position: sticky; top: 0; }
+        .col-payload { width: 40%; }
+        .col-id { width: 200px; }
+        .col-updatedAt { width: 150px; }
+        .col-isDeleted { width: 80px; }
+        .col-collection { width: 150px; }
         tr:nth-child(even) { background: #f9f9f9; }
         tr:hover { background: #f1f1f1; }
         h2 { color: #333; margin-top: 0; }
         .empty { color: #888; font-style: italic; }
+        .payload-text { font-family: monospace; font-size: 0.85em; color: #555; }
     </style></head><body><h1>Database Data Explorer</h1>");
 
     for (table_name,) in tables {
@@ -247,20 +253,21 @@ pub async fn dev_schema(State(state): State<AppState>) -> Html<String> {
 
             let columns = rows[0].columns();
             for col in columns {
-                html.push_str(&format!("<th>{}</th>", col.name()));
+                html.push_str(&format!("<th class='col-{}'>{}</th>", col.name(), col.name()));
             }
             html.push_str("</tr></thead><tbody>");
 
             for row in rows {
                 html.push_str("<tr>");
-                for i in 0..row.columns().len() {
+                for (i, col) in row.columns().iter().enumerate() {
                     let value: String = row
                         .try_get::<String, _>(i)
                         .or_else(|_| row.try_get::<i64, _>(i).map(|v| v.to_string()))
                         .or_else(|_| row.try_get::<bool, _>(i).map(|v| v.to_string()))
                         .unwrap_or_else(|_| "<i>binary/null</i>".to_string());
 
-                    html.push_str(&format!("<td>{}</td>", value));
+                    let class_name = if col.name() == "payload" { "payload-text" } else { "" };
+                    html.push_str(&format!("<td class='{}' title='{}'>{}</td>", class_name, value.replace("'", "&apos;"), value));
                 }
                 html.push_str("</tr>");
             }
