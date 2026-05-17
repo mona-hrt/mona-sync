@@ -1,14 +1,17 @@
 mod handlers;
 mod models;
 
-use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
+use axum::Router;
 use axum_governor::extractor::PeerIp;
-use axum_governor::{GovernorConfigBuilder, GovernorLayer, Quota, nz};
+use axum_governor::{nz, GovernorConfigBuilder, GovernorLayer, Quota};
 use axum_server::tls_rustls::RustlsConfig;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::env;
 use std::net::SocketAddr;
+use tower_http::trace::TraceLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -20,6 +23,11 @@ pub struct AppState {
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
+
+    // Initialize logging
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let server_ip = env::var("SERVER_IP").unwrap_or_else(|_| "0.0.0.0".to_string());
@@ -47,7 +55,7 @@ async fn main() {
     };
 
     let governor_conf = GovernorConfigBuilder::default()
-        .quota_default(Quota::requests_per_second(nz!(5u32)))
+        .quota_default(Quota::requests_per_second(nz!(25u32)))
         .with_extractor(PeerIp::default())
         .expect_connect_info()
         .finish()
@@ -77,6 +85,8 @@ async fn main() {
             "/api/sync/vault",
             get(handlers::get_vault).post(handlers::update_vault),
         )
+        .layer(TraceLayer::new_for_http())
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB limit
         .layer(GovernorLayer::new(governor_conf))
         .with_state(state);
 
